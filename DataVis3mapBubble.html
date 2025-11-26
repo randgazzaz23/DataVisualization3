@@ -1,0 +1,738 @@
+
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        
+
+        <script src="https://d3js.org/d3.v7.min.js"></script>
+        <script src="https://d3js.org/d3-scale-chromatic.v1.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic&display=swap" rel="stylesheet"/>
+
+
+
+
+
+        
+        <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f7fa;
+            font-family: Arial, sans-serif;
+        }
+        
+        #flex-container {
+           display:flex;
+           gap:20px;
+           justify-content: center;
+           align-items:flex-start;
+        }
+        
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        #bubble-container svg,
+        #map-container svg{
+            width: 100%;
+            height: auto;
+            background: none;
+            margin-bottom: 30px;
+        }
+        
+        .district {
+            stroke: #ffffff;
+            stroke-width: 0.1;
+            transition: fill 0.3s ease;
+        }
+        
+        .district:hover {
+		stroke: #e74c3c;
+		stroke-width: 0.2;
+		opacity: 0.9; /* Slight highlight on hover */
+        }
+        
+		#total-display {
+			position: absolute;
+			top: 30px;
+			right: 30px;
+			background: #e74c3c;
+			color: white;
+			padding: 12px 20px;
+			border-radius: 8px;
+			font-size: 1.2em;
+			font-weight: bold;
+			box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+			z-index: 10;
+		}
+
+		#total-count {
+			font-size: 1.3em;
+		}
+        
+        #tooltip {
+            position: absolute;
+            background: white;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            pointer-events: none;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            display:none;
+        }
+
+        #bubble-legend{
+            display:flex;
+            justify-content: center;
+            align-items:center;
+            
+            gap:20px;
+        }
+		
+        #bubble-wrapper{
+            display:flex;
+            flex-direction: column;
+            align-items:center;
+            gap:10px;
+            
+        }
+
+        .legend-item{
+            display:flex;
+            flex-direction: column;
+            align-items:center;
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            
+        }
+
+        .legend-rect{
+            width:40px;
+            height:20px;
+            border: 1px solid #000;
+        }
+
+		
+		
+    </style>
+
+
+
+    </head>
+
+    <body>
+        
+        <h1>Dubai Districts - Accident Statistics</h1>
+
+    <div id="total-display">
+        Total Accidents:<span id="total-count">0</span>
+    </div>
+
+    
+
+   
+    <div id="flex-container" style="display: flex; gap: 20px; justify-content:center; align-items: flex-start;">
+        <div id="map-container"></div>
+        <div id="bubble-wrapper">
+        <div id="bubble-container"></div>
+        <div id="bubble-legend"></div>
+        </div>
+
+    </div>
+    <div id="tooltip"></div>
+    
+    
+    
+
+    <script>
+
+
+    //bubble chart
+        const bubbleWidth=800;
+		const bubbleHeight=600;
+
+        const margin=1;
+
+    //choropleth
+        const choroWidth = 1000;
+        const choroHeight = 700;
+
+
+        // Set up projection for Dubai
+        const projection = d3.geoMercator()
+            .center([55.2708, 25.2048])  // Dubai coordinates
+            .scale(5000)
+            .translate([choroWidth / 2, choroHeight / 2]);
+
+        // Create path generator
+        const path = d3.geoPath().projection(projection);
+
+
+
+        // Create Choropleth SVG
+        const mapSvg = d3.select("#map-container")
+            .append("svg")
+            .attr("width", choroWidth)
+            .attr("height", choroHeight);
+
+        // Create map group
+        const mapGroup = mapSvg.append("g");
+
+
+        // Create Bubble SVG
+        const bubbleSvg=d3.select("#bubble-container")
+         .append("svg")
+            .attr("width", bubbleWidth)
+            .attr("height", bubbleHeight)
+            .attr("viewBox", [-margin, -margin, bubbleWidth, bubbleHeight])
+            .attr("font", "10px 'Noto Sans Arabic', Arial, Tahoma, sans-serif;")
+            .attr("text-anchor", "middle")
+
+		
+        //Tooltip
+        const tooltip = d3.select("#tooltip");
+
+
+        //get severity levels based on arabic labeling
+        
+            function getSeverity(arabicName){
+                const words=arabicName.trim().split(" ");
+                const last=words[words.length-1];
+
+                if(last.includes("بليغ")) return "severe";
+                if(last.includes("بسيط"))return "light";
+                return "other";
+            }
+
+
+            //determine the color hue
+            const severityHue=d3.scaleOrdinal()
+            .domain(["severe","light","other"])
+            .range([0,140,280]);
+
+            //determine the colro saturation
+            const saturationScale=d3.scaleLinear()
+            .domain([1,100])
+            .range([40,95]);
+
+
+
+
+        // Variable to store the initial full-map transformation
+		let initialTransform; 
+
+
+        // Define the zoom behavior
+        const zoom = d3.zoom()
+            .scaleExtent([1, 8]) // Limits the zoom-in and zoom-out scale
+            .on("zoom", handleZoom);
+
+        // Apply the zoom behavior to the SVG
+        mapSvg.call(zoom);
+
+		//Handle the zoom behaviour
+		function handleZoom (event){
+		mapGroup.attr("transform" , event.transform);
+		}
+		
+		
+	
+		// --- Zoom-on-Click Function (Single-click always zooms in) ---
+    function clicked(event, feature) {
+    // Prevent the single click from triggering the reset function immediately after it
+    event.stopPropagation(); 
+    
+    const [[x0, y0], [x1, y1]] = path.bounds(feature);
+    
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const center = [(x0 + x1) / 2, (y0 + y1) / 2];
+
+    const paddingFactor = 0.95; // Adds a small border around the zoomed area
+    
+    // Calculate the necessary scale and translation to fit the new feature
+    const scale = paddingFactor / Math.max(dx / choroWidth, dy / choroHeight);
+    const translate = [
+        choroWidth / 2 - scale * center[0], 
+        choroHeight / 2 - scale * center[1]
+    ];
+    
+    // Apply the transformation with a smooth transition
+    mapSvg.transition()
+        .duration(750)
+        .call(zoom.transform, d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale));
+}
+
+    
+		
+		
+		// --- Double-Click Reset Function ---
+function resetZoomOnDoubleClick(event) {
+    // Stop the propagation to prevent conflicts with single-click (optional, but good practice)
+    event.stopPropagation();
+    
+    // Reset to the stored initial transform (full map view)
+    mapSvg.transition()
+        .duration(750)
+        .call(zoom.transform, d3.zoomIdentity.translate(initialTransform.x, initialTransform.y).scale(initialTransform.k));
+
+        
+}
+
+
+        // Function to extract community name
+        function getCommunityName(feature) {
+            return (feature.properties.CNAME_E || 
+                   feature.properties.COMMUNITY_E ||
+                   feature.properties.LABEL_E ||
+                   feature.properties.name ||
+                   "Unknown Community").trim();
+        }
+
+
+        //drawing legend colormap of the choropleth
+		function drawLegend(colorScale, maxPercentage) {
+			const legendWidth = 300;
+			const legendHeight = 15;
+
+			// Remove old legend group
+			mapSvg.select(".color-legend-group").remove();
+			mapSvg.select("#legend-gradient").remove(); // remove old gradient
+
+			// - must be attached directly to the SVG, not inside the legend group ---
+			const defs = mapSvg.append("defs");
+
+			const linearGradient = defs.append("linearGradient")
+				.attr("id", "legend-gradient")
+				.attr("x1", "0%")
+				.attr("x2", "100%");
+				
+		
+			linearGradient.append("stop")
+		        .attr("offset", "0%")
+		        .attr("stop-color", colorScale(0)); // Start color (lightest red)
+
+		    linearGradient.append("stop")
+		        .attr("offset", "100%")
+		        .attr("stop-color", colorScale(maxPercentage)); // End color (darkest red)
+
+		   // Create legend group AFTER defs
+		    const legendGroup = mapSvg.append("g")
+		        .attr("class", "color-legend-group")
+		        .attr("transform", "translate(15, 75)"); // Adjusted Y-position for alignment
+
+
+
+
+
+            legendGroup.append("text")
+                .attr("x",0)
+                .attr("y",-10)
+                .attr("font-size",14)
+                .attr("font-weight","bold")
+                .attr("fill","#000")
+                .text("Accident Percentage");
+
+
+		    // Draw the color bar
+		    legendGroup.append("rect")
+		        .attr("width", legendWidth)
+		        .attr("height", legendHeight)
+		        .style("fill", "url(#legend-gradient)")
+		        .style("stroke", "#999")
+		        .style("stroke-width", 0.5);
+
+
+            legendGroup.append("text")
+                .attr("x",0)
+                .attr("y",legendHeight+15)
+                .attr("font-size",12)
+                .attr("fill","#000")
+                .text("Low(0%)");
+
+            legendGroup.append("text")
+                .attr("x",legendWidth)
+                .attr("y",legendHeight+15)
+                .attr("text-anchor","end")
+                .attr("font-size",12)
+                .attr("fill","#000")
+                .text(`High(${maxPercentage.toFixed(2)}%)`);
+
+
+            
+
+		    // Update label
+		    d3.select("#max-percentage-label").text(`High (${maxPercentage.toFixed(2)}%)`);
+		}
+
+
+        // Load both GeoJSON and accidents data
+        Promise.all([
+            d3.json("https://randgazzaz23.github.io/DataVis1/Community1.geojson"),
+            d3.csv("https://raw.githubusercontent.com/randgazzaz23/DataVis/main/accidents.csv")
+        ]).then(([geojsonData, accidentsData])=> {
+
+
+        //get accidents by district based on geojson
+        const accidentsByDistrict={};
+        geojsonData.features.forEach(feature=>{
+            const communityName=getCommunityName(feature);
+            accidentsByDistrict[communityName]=[];
+        });
+
+        accidentsData.forEach(accident=>
+        {
+            const point=turf.point([+accident.acci_y,+accident.acci_x]);
+            geojsonData.features.forEach(
+                community=>{
+                    if(turf.booleanPointInPolygon(point, community)){
+                        const communityName=getCommunityName(community);
+                        accidentsByDistrict[communityName].push(accident);
+                    }
+                }
+            );
+        }
+        );
+
+
+
+        // Initialize accident counter
+		const accidentCounter = {};
+		geojsonData.features.forEach(feature => {
+        const communityName = getCommunityName(feature);
+        accidentCounter[communityName] = 0;
+
+        });
+
+
+
+        // COUNT ACCIDENTS WITH SWAPPED COORDINATES
+		let foundCount = 0;
+    
+		accidentsData.forEach(accident => {
+        // SWAPPED: acci_y is longitude, acci_x is latitude
+        const longitude = +accident.acci_y;
+        const latitude = +accident.acci_x;
+        const point = turf.point([longitude, latitude]);
+       
+        
+        geojsonData.features.forEach(community => {
+            if (turf.booleanPointInPolygon(point, community)) {
+                const communityName = getCommunityName(community);
+                accidentCounter[communityName]++;
+                foundCount++;
+            }
+        });
+        
+        
+    });
+
+
+	// Update the total accidents display
+	d3.select("#total-count").text(foundCount.toLocaleString());
+	
+	// CALCULATE PERCENTAGES
+	const totalAccidents = foundCount;
+	const accidentPercentage = {};
+
+	Object.keys(accidentCounter).forEach(community => {
+		accidentPercentage[community] = totalAccidents > 0 
+			? (accidentCounter[community] / totalAccidents) * 100 
+			: 0;
+	});
+
+
+            // Draw the map with colors based on accident count
+            const percentageValues  = Object.values(accidentPercentage ).filter(val => val > 0);
+            const maxPercentage = percentageValues .length > 0 ? d3.max(percentageValues ) : 1;
+            
+            const colorScale = d3.scaleSequential()
+                .domain([0, maxPercentage])
+                .interpolator(d3.interpolateReds);
+            
+            const districts = mapGroup.selectAll(".district")
+                .data(geojsonData.features)
+                .enter()
+                .append("path")
+                .attr("class", "district")
+                .attr("d", path)
+                .attr("fill", feature => {
+                    const communityName = getCommunityName(feature);
+                    const percentage =  accidentPercentage[communityName];
+                    return colorScale(percentage);
+                })
+                .attr("stroke", "#ffffff")
+                .attr("stroke-width", 0.1)
+                .on("mouseover", function(event, feature) {
+                    const communityName = getCommunityName(feature);
+                    const count = accidentCounter[communityName];
+                    const percentage = accidentPercentage[communityName];
+					
+                    tooltip
+                        .style("display", "block")
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY - 10) + "px")
+                        .html(`
+                            <strong>${communityName}</strong><br>
+                            Accidents: ${count}<br>
+							Percentage: ${percentage.toFixed(2)}%
+                        `);
+						
+                    
+                    d3.select(this).attr("stroke", "#e74c3c").attr("stroke-width", 2);
+                })
+                .on("mouseout", function() {
+                    tooltip.style("display", "none");
+                    d3.select(this).attr("stroke", "#ffffff").attr("stroke-width", 0.1);
+                })
+				
+				//--- Add click handler for the zoom ---
+				.on("click", function(event,feature){
+                    clicked(event,feature)
+                    const communityName=getCommunityName(feature)
+                    const filteredAccidents=accidentsByDistrict[communityName] || [];
+                    updateBubbleChart(filteredAccidents);
+                })
+                
+                .on("dblclick", resetZoomOnDoubleClick); 
+
+                mapSvg.on("click", (event)=>{
+                    if(event.target.tagName==="svg"){
+                        updateBubbleChart(accidentsData);
+                    }
+                }
+            )
+ 
+                
+            // Fit map to container
+           initialTransform= fitMapToContainer(geojsonData);
+           drawLegend(colorScale, maxPercentage);
+           
+		   // Immediately apply the initial transform to the SVG
+            mapSvg.call(zoom.transform, d3.zoomIdentity.translate(initialTransform.x, initialTransform.y).scale(initialTransform.k));
+            
+            //update bubble chart filtering
+            updateBubbleChart(accidentsData);
+
+                    
+        //Color Map Legend for Bubble Chart
+
+        
+        const legendData=[
+            {name:"Severe", hue:severityHue("severe") },
+            {name:"Light", hue:severityHue("light")},
+            {name:"Other", hue:severityHue("other")}
+
+        ];
+
+
+        const bubbleLegend=d3.select("#bubble-legend");
+        bubbleLegend.insert("div", ":first-child")
+                .attr("margin-botton","5px")
+                .attr("text-align", "center")
+                .attr("font-size",14)
+                .attr("font-weight","bold")
+                .text("Accident Severity");
+
+
+        const legend=bubbleLegend.selectAll(".legend-item")
+            .data(legendData)
+            .enter()
+            .append("div")
+            .attr("class", "legend-item");
+
+        legend.append("div")
+                .attr("class","legend-rect")
+                .style("width","80px")
+                .style("height","20px")
+                .style("border","1px solid #000")
+                .style("background", d=>{
+                    
+                    const gradient=d3.scaleLinear()
+                    .domain([1,100])
+                    .range([
+
+                        `hsl(${d.hue},40%, 50%)`,
+                        `hsl(${d.hue},95%, 50%)`
+
+                    ]);
+                    return `linear-gradient(to right, ${gradient(1)},${gradient(100)})`
+                
+                });
+
+        legend.append("div")
+                .text(d=>d.name);
+
+ 
+    //function to update bubble chart upon selection
+    function updateBubbleChart(filteredData){
+
+            
+        //count the frequency based on accident causes
+        const accidentCauseCounts=d3.rollups(
+
+            filteredData,
+            v=> v.length,
+            d=> d.acci_name
+
+        ).map(([name,value])=>({name,value}));
+
+
+        const packData={children: accidentCauseCounts}
+
+        //get bubble positions
+        const root=d3.pack()
+        .size([bubbleWidth-2*margin, bubbleHeight-2*margin])
+        .padding(5)
+        (d3.hierarchy(packData).sum(d=>d.value));
+
+        
+        //create nodes of the bubble chart
+        const node=bubbleSvg.selectAll("g.bubble")
+        .data(root.leaves(), d=>d.data.name);
+
+
+        //ensure smooth transitioning during filtering
+        node.exit()
+        .transition()
+        .duration(600)
+        .attr("transform", d=> `translate(${d.x}, ${d.y})scale(0)`)
+        .remove();
+
+
+        node.transition()
+        .duration(800)
+        .attr("transform", d=> `translate(${d.x},${d.y})`)
+
+        node.select("circle")
+            .transition()
+            .duration(800)
+            .attr("r", d=>d.r);
+
+
+        node.select("text")
+        .transition()
+        .duration(800)
+        .attr("font-size", d=> Math.min(2*d.r/d.data.name.length, d.r/2)+"px")
+        .text(d=>d.data.name);
+
+        const enter=node.enter()
+        .append("g")
+        .attr("class", "bubble")
+        .attr("transform", d=> `translate(${d.x},${d.y})scale(0)`);
+
+        enter.transition()
+        .duration(800)
+        .attr("transform", d=> `translate(${d.x},${d.y})scale(1)`);
+
+        //create bubbles based on color saturation and hue
+        enter.append("circle")
+        .attr("r",0)
+        .attr("fill", d=> {
+            const severity=getSeverity(d.data.name);
+            const hue=severityHue(severity);
+            const sat=saturationScale(d.data.value);
+            return `hsl(${hue}, ${sat}%, 50%)`;
+
+        })
+        .attr("fill-opacity",0.7)
+        .transition()
+        .duration(800)
+        .attr("r", d=>d.r);
+
+        //text labels to be added
+        enter.append("text")
+            .attr("text-anchor", "middle")
+            .attr("dominant-baseline", "middle")
+            .attr("fill", "#000")
+            .attr("font-family", "'Noto Sans Arabic', Arial, sans-serif")
+            .attr("font-size", 1)
+            .text(d=> d.data.name)
+            .transition()
+            .delay(300)
+            .duration(500)
+            .attr("font-size", d=> Math.min(2*d.r/d.data.name.length, d.r/2)+"px");
+
+
+        //tooltip behavior of bubble chart
+            enter.select("circle")
+            .on("mouseover", (event, d)=>{
+                tooltip.style("display", "block")
+                .html(`<strong>${d.data.name}</strong><br>Accidents: ${d.data.value}`)
+                .style("left", (event.pageX+10)+"px")
+            .style("top",(event.pageY-20)+"px");
+        })
+        .on("mousemove", (event)=>{
+            tooltip.style("left", (event.pageX+10)+"px")
+            .style("top", (event.pageY-20)+"px");
+        })
+
+        .on("mouseout", ()=> tooltip.style("display","none"))
+
+
+
+    }
+         
+    console.log("Accident counts:", accidentCounter);
+	console.log("Accident percentages:", accidentPercentage);
+		
+    });
+     
+        
+      
+        // Function to fit map perfectly in container
+        function fitMapToContainer(geojsonData) {
+            const bounds = path.bounds(geojsonData);
+            const dx = bounds[1][0] - bounds[0][0];
+            const dy = bounds[1][1] - bounds[0][1];
+            const x = (bounds[0][0] + bounds[1][0]) / 2;
+            const y = (bounds[0][1] + bounds[1][1]) / 2;
+            const scale = 0.9 / Math.max(dx / choroWidth, dy / choroHeight);
+            const translate = [choroWidth / 2 - scale * x, choroHeight / 2 - scale * y];
+
+
+			return { x: translate[0], y: translate[1], k: scale };
+        }
+		
+        // Function to display accidents list
+        function displayAccidentsList(accidentCounter) {
+            const communityList = d3.select("#community-list");
+            const totalAccidents = d3.sum(Object.values(accidentCounter));
+            
+            // Update total accidents count
+            d3.select("#total-accidents").text(`Total: ${totalAccidents}`);
+            
+            // Sort communities by accident count (descending)
+            const sortedCommunities = Object.entries(accidentCounter)
+                .sort((a, b) => b[1] - a[1]);
+            
+            // Create list items for each community
+            const communityItems = communityList.selectAll(".community-item")
+                .data(sortedCommunities)
+                .enter()
+                .append("div")
+                .attr("class", "community-item");
+            
+            communityItems.append("div")
+                .attr("class", "community-name")
+                .text(d => d[0]);
+                
+            communityItems.append("div")
+                .attr("class", "accident-count")
+                .text(d =>` ${d[1]} accident${d[1] !== 1 ? 's' : ''}`);
+                
+        
+            }
+
+
+        </script>
+
+
+    </body>
+
+
+</html>
